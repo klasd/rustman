@@ -8,9 +8,12 @@ A lightweight, terminal-based HTTP client built with Rust and Ratatui, inspired 
 - 📝 **Connection Management** - Create, save, and manage multiple HTTP connections
 - 🔗 **Query Parameters** - Add and manage query strings for your requests
 - 📦 **Payload Support** - Send POST/PUT/PATCH requests with JSON or custom payloads
-- 💾 **Persistent Storage** - Save connections as JSON files for later use
+- 💾 **Persistent Storage** - Save connections as JSON files and auto-load them on startup
 - 🎯 **HTTP Methods** - Support for GET, POST, PUT, PATCH methods
 - ⚡ **Async Requests** - Non-blocking HTTP requests powered by Tokio and Reqwest
+- 🔒 **HTTPS Support** - Automatic HTTPS detection on port 443
+- ⏱️ **Request Timeout** - 10-second timeout with visual feedback and cancellation support
+- 🎨 **Auto-Format Responses** - JSON pretty-printing and smart text wrapping
 
 ## Installation
 
@@ -38,9 +41,10 @@ cargo run
    ```bash
    cargo run
    ```
+   Your previously saved connections will automatically load.
 
 2. **Create a new connection** (press `n`)
-   - You'll see an input box in the Request panel
+   - A dialog box appears in the Request panel
    - Enter a name for your connection (e.g., "my-api")
    - Press `Enter` to confirm
    - You'll see: "✓ Connection 'my-api' created"
@@ -55,13 +59,15 @@ cargo run
    - Press `Esc` at any time to cancel editing
 
 4. **Send a request** (press `r`)
-   - The response will appear in the Response panel
+   - A "Connecting..." dialog appears with the target URL
+   - You can press `Esc` to cancel if needed
+   - The response appears in the Response panel (or timeout/error after 10 seconds)
    - Status code and body will be displayed
    - Use Page Up/Down to scroll large responses
 
 5. **Save your connection** (press `s`)
    - Your connection is saved as `<connection-name>.json`
-   - You can manually edit the JSON file or reload it later
+   - Connections automatically load when you restart the app
 
 ## Connection Management
 
@@ -83,11 +89,12 @@ Connections are displayed by **name** in the left panel, not by URL. This lets y
 | `s` | Save selected connection to JSON file |
 | `l` | Load connection from JSON file (coming soon) |
 
-### Request Execution
+### Request Execution & Connection Status
 
 | Key | Action |
 |-----|--------|
 | `r` | Send HTTP request |
+| `Esc` | Cancel active request (while Connecting dialog is shown) |
 
 ### Response Viewing
 
@@ -176,8 +183,8 @@ Rustman automatically formats responses for better readability:
 └─────────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────────┐
 │ Shortcuts (15%)                                              │
-│ Controls: n-new d-delete u-edit URL p-edit port r-send...   │
-│ Input mode: Enter-confirm Backspace-delete char Esc-cancel  │
+│ Controls: n-new d-delete e-edit r-send s-save                │
+│ Request: Esc-cancel  Response: PgUp/PgDn-scroll             │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -226,10 +233,21 @@ You can manually edit these JSON files or load them back into the application.
 
 ## Roadmap
 
-- [ ] Load connections from JSON files
-- [ ] HTTP method selector (GET, POST, PUT, DELETE, PATCH)
-- [ ] Query parameter editor
-- [ ] Request body/payload editor
+### ✅ Completed
+- [x] Save connections to JSON files
+- [x] Auto-load connections from JSON files on startup
+- [x] Connection editing with unified dialog
+- [x] Request timeout (10 seconds) with visual feedback
+- [x] Cancel active requests
+- [x] HTTPS auto-detection on port 443
+- [x] Input dialogs for creating connections
+- [x] Response auto-formatting (JSON pretty-printing, text wrapping)
+
+### 🔄 In Progress / Planned
+- [ ] Load connections from JSON files via UI
+- [ ] HTTP method selector (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS)
+- [ ] Query parameter editor dialog
+- [ ] Request body/payload editor dialog
 - [ ] Response syntax highlighting (JSON, XML, HTML)
 - [ ] Request history
 - [ ] Authentication support (Basic Auth, Bearer tokens)

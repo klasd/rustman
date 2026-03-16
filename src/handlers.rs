@@ -27,6 +27,7 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                 app.input_mode = InputMode::EditingConnection;
                 app.edit_field = EditField::Name;
                 app.input_buffer.clear();
+                load_current_field_value(app);
                 app.set_error("Editing connection - Tab to switch fields, Enter to confirm, Esc to cancel".to_string());
             } else {
                 app.set_error("No connection selected".to_string());
