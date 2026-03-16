@@ -1,0 +1,9 @@
+{
+  "name": "LocalServer",
+  "url": "http://localhost",
+  "port": 3000,
+  "method": "GET",
+  "query_params": {},
+  "payload": "",
+  "headers": {}
+}

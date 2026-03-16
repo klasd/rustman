@@ -1,0 +1,1 @@
+/home/klasdahlen/src/rust/rustman/target/debug/rustman: /home/klasdahlen/src/rust/rustman/src/app.rs /home/klasdahlen/src/rust/rustman/src/handlers.rs /home/klasdahlen/src/rust/rustman/src/main.rs /home/klasdahlen/src/rust/rustman/src/models.rs /home/klasdahlen/src/rust/rustman/src/ui.rs

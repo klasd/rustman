@@ -1,0 +1,18 @@
+TESTING: Connection Name Input Dialog
+
+Steps:
+1. Run the binary: ./target/debug/rustman
+2. Press 'n' to create a new connection
+3. You should see a dialog box with:
+   - Title: "─ Create New Connection ─" (in green)
+   - Label: "Connection Name:"
+   - Input field with cursor: "> _" (in yellow with dark gray background)
+   - Instructions: "Enter create | Esc cancel" (in green/red)
+4. Type a name for the connection (e.g., "My API")
+5. Press Enter to create or Esc to cancel
+6. The dialog should disappear and the connection should appear in the list
+
+Expected behavior:
+- Text is visible as you type
+- Dialog clearly shows where to input text
+- Instructions are clear about how to confirm/cancel
