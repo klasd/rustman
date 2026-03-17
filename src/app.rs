@@ -1,6 +1,7 @@
-use crate::models::{ApiResponse, Connection, EditField, InputMode};
+use crate::models::{ActivePanel, ApiResponse, Connection, EditField, InputMode};
 use anyhow::Result;
 use std::fs;
+use std::path::PathBuf;
 use tokio::sync::oneshot;
 
 pub struct App {
@@ -14,9 +15,33 @@ pub struct App {
     pub error_message_frames: u32,
     pub edit_field: EditField,
     pub request_cancel_tx: Option<oneshot::Sender<()>>,
+    pub active_panel: ActivePanel,
+    pub edit_backup: Option<Connection>,
 }
 
 impl App {
+    fn get_config_dir() -> Result<PathBuf> {
+        let config_dir = if cfg!(target_os = "windows") {
+            // On Windows, use AppData/Local/rustman
+            if let Some(app_data) = dirs::data_local_dir() {
+                app_data.join("rustman").join("sites")
+            } else {
+                anyhow::bail!("Could not determine AppData directory");
+            }
+        } else {
+            // On Unix/Linux/macOS, use ~/.config/rustman/sites
+            if let Some(config) = dirs::config_dir() {
+                config.join("rustman").join("sites")
+            } else {
+                anyhow::bail!("Could not determine config directory");
+            }
+        };
+
+        // Create the directory if it doesn't exist
+        fs::create_dir_all(&config_dir)?;
+        Ok(config_dir)
+    }
+
     pub fn new() -> Self {
         let mut app = Self {
             connections: Vec::new(),
@@ -29,6 +54,8 @@ impl App {
             error_message_frames: 0,
             edit_field: EditField::Name,
             request_cancel_tx: None,
+            active_panel: ActivePanel::Connections,
+            edit_backup: None,
         };
 
         // Load all saved connections from JSON files
@@ -43,7 +70,14 @@ impl App {
 
     pub fn delete_selected_connection(&mut self) {
         if !self.connections.is_empty() && self.selected_connection < self.connections.len() {
-            self.connections.remove(self.selected_connection);
+            let connection = self.connections.remove(self.selected_connection);
+
+            // Delete the connection file from disk
+            if let Ok(config_dir) = Self::get_config_dir() {
+                let file_path = config_dir.join(format!("{}.json", connection.name));
+                let _ = fs::remove_file(file_path); // Ignore errors if file doesn't exist
+            }
+
             if self.selected_connection > 0 {
                 self.selected_connection -= 1;
             }
@@ -51,28 +85,34 @@ impl App {
     }
 
     pub fn save_connection(&self, connection: &Connection) -> Result<()> {
+        let config_dir = Self::get_config_dir()?;
+        let file_path = config_dir.join(format!("{}.json", connection.name));
         let json = serde_json::to_string_pretty(connection)?;
-        fs::write(format!("{}.json", connection.name), json)?;
+        fs::write(file_path, json)?;
         Ok(())
     }
 
     pub fn load_connection(name: &str) -> Result<Connection> {
-        let json = fs::read_to_string(format!("{}.json", name))?;
+        let config_dir = Self::get_config_dir()?;
+        let file_path = config_dir.join(format!("{}.json", name));
+        let json = fs::read_to_string(file_path)?;
         let connection = serde_json::from_str(&json)?;
         Ok(connection)
     }
 
     pub fn load_all_connections(&mut self) {
-        // Scan current directory for .json files and load them as connections
-        if let Ok(entries) = fs::read_dir(".") {
-            for entry in entries.flatten() {
-                if let Ok(metadata) = entry.metadata() {
-                    if metadata.is_file() {
-                        if let Some(filename) = entry.file_name().to_str() {
-                            if filename.ends_with(".json") {
-                                let connection_name = filename.trim_end_matches(".json");
-                                if let Ok(connection) = Self::load_connection(connection_name) {
-                                    self.connections.push(connection);
+        // Scan config directory for .json files and load them as connections
+        if let Ok(config_dir) = Self::get_config_dir() {
+            if let Ok(entries) = fs::read_dir(config_dir) {
+                for entry in entries.flatten() {
+                    if let Ok(metadata) = entry.metadata() {
+                        if metadata.is_file() {
+                            if let Some(filename) = entry.file_name().to_str() {
+                                if filename.ends_with(".json") {
+                                    let connection_name = filename.trim_end_matches(".json");
+                                    if let Ok(connection) = Self::load_connection(connection_name) {
+                                        self.connections.push(connection);
+                                    }
                                 }
                             }
                         }

@@ -24,11 +24,8 @@ impl Connection {
     }
 
     pub fn full_url(&self) -> String {
-        // Determine protocol based on port
-        let protocol = match self.port {
-            443 => "https",
-            _ => "http",
-        };
+        // Use HTTPS for port 443, HTTP for others
+        let protocol = if self.port == 443 { "https" } else { "http" };
         let mut url = format!("{}://{}:{}", protocol, self.url, self.port);
         if !self.query_params.is_empty() {
             url.push('?');
@@ -49,6 +46,12 @@ pub enum InputMode {
     ConnectionName,
     EditingConnection,
     Connecting,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ActivePanel {
+    Connections,
+    Response,
 }
 
 #[derive(Debug, Clone)]

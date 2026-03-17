@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::models::{Connection, EditField, InputMode};
+use crate::models::{Connection, EditField, InputMode, ActivePanel};
 use crossterm::event::{KeyCode, KeyEvent};
 
 pub async fn handle_input(app: &mut App, key: KeyEvent) {
@@ -23,12 +23,13 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.set_error("Connection deleted".to_string());
         }
         KeyCode::Char('e') => {
-            if app.current_connection().is_some() {
+            if let Some(conn) = app.current_connection() {
+                // Save a backup of the current connection
+                app.edit_backup = Some(conn.clone());
                 app.input_mode = InputMode::EditingConnection;
                 app.edit_field = EditField::Name;
                 app.input_buffer.clear();
                 load_current_field_value(app);
-                app.set_error("Editing connection - Tab to switch fields, Enter to confirm, Esc to cancel".to_string());
             } else {
                 app.set_error("No connection selected".to_string());
             }
@@ -53,10 +54,26 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) {
             app.set_error("Load feature coming soon".to_string());
         }
         KeyCode::Up => {
-            app.select_prev();
+            if app.active_panel == ActivePanel::Connections {
+                app.select_prev();
+            }
         }
         KeyCode::Down => {
-            app.select_next();
+            if app.active_panel == ActivePanel::Connections {
+                app.select_next();
+            }
+        }
+        KeyCode::Char('j') => {
+            // Vim keybinding: scroll down
+            if app.active_panel == ActivePanel::Response {
+                app.scroll_response = app.scroll_response.saturating_add(1);
+            }
+        }
+        KeyCode::Char('k') => {
+            // Vim keybinding: scroll up
+            if app.active_panel == ActivePanel::Response {
+                app.scroll_response = app.scroll_response.saturating_sub(1);
+            }
         }
         KeyCode::Char('r') => {
             // Send request
@@ -68,17 +85,64 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) {
                 app.set_error("No connection selected".to_string());
             }
         }
+        KeyCode::Char('p') => {
+            // Switch panels with 'p' key
+            app.active_panel = match app.active_panel {
+                ActivePanel::Connections => {
+                    app.set_error("Switched to Response panel - use j/k to scroll".to_string());
+                    ActivePanel::Response
+                }
+                ActivePanel::Response => {
+                    app.set_error("Switched to Connections panel - use ↑↓ to navigate".to_string());
+                    ActivePanel::Connections
+                }
+            };
+        }
+        KeyCode::Tab => {
+            // Switch between panels
+            app.active_panel = match app.active_panel {
+                ActivePanel::Connections => {
+                    app.set_error("Switched to Response panel - use j/k to scroll".to_string());
+                    ActivePanel::Response
+                }
+                ActivePanel::Response => {
+                    app.set_error("Switched to Connections panel - use ↑↓ to navigate".to_string());
+                    ActivePanel::Connections
+                }
+            };
+        }
+        KeyCode::BackTab => {
+            // Shift+Tab also switches panels (reverse direction)
+            app.active_panel = match app.active_panel {
+                ActivePanel::Connections => {
+                    app.set_error("Switched to Response panel - use j/k to scroll".to_string());
+                    ActivePanel::Response
+                }
+                ActivePanel::Response => {
+                    app.set_error("Switched to Connections panel - use ↑↓ to navigate".to_string());
+                    ActivePanel::Connections
+                }
+            };
+        }
         KeyCode::PageDown => {
-            app.scroll_response = app.scroll_response.saturating_add(5);
+            if app.active_panel == ActivePanel::Response {
+                app.scroll_response = app.scroll_response.saturating_add(5);
+            }
         }
         KeyCode::PageUp => {
-            app.scroll_response = app.scroll_response.saturating_sub(5);
+            if app.active_panel == ActivePanel::Response {
+                app.scroll_response = app.scroll_response.saturating_sub(5);
+            }
         }
         KeyCode::Home => {
-            app.scroll_response = 0;
+            if app.active_panel == ActivePanel::Response {
+                app.scroll_response = 0;
+            }
         }
         KeyCode::End => {
-            app.scroll_response = u16::MAX;
+            if app.active_panel == ActivePanel::Response {
+                app.scroll_response = u16::MAX;
+            }
         }
         _ => {}
     }
@@ -96,8 +160,13 @@ fn handle_connection_name_input(app: &mut App, key: KeyEvent) {
             if !app.input_buffer.is_empty() {
                 let name = app.input_buffer.clone();
                 let conn = Connection::new(name.clone(), "localhost".to_string(), 3000);
-                app.add_connection(conn);
-                app.set_error(format!("✓ Connection '{}' created", name));
+                // Save to disk immediately
+                if let Err(e) = app.save_connection(&conn) {
+                    app.set_error(format!("✗ Failed to create connection: {}", e));
+                } else {
+                    app.add_connection(conn);
+                    app.set_error(format!("✓ Connection '{}' created and saved", name));
+                }
             } else {
                 app.set_error("Connection name cannot be empty".to_string());
             }
@@ -115,6 +184,8 @@ fn handle_connection_name_input(app: &mut App, key: KeyEvent) {
 fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Tab => {
+            // Save the current field before moving to next
+            apply_field_edit(app);
             // Move to next field
             app.edit_field = match app.edit_field {
                 EditField::Name => EditField::Url,
@@ -126,6 +197,8 @@ fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
             load_current_field_value(app);
         }
         KeyCode::BackTab => {
+            // Save the current field before moving to previous
+            apply_field_edit(app);
             // Move to previous field
             app.edit_field = match app.edit_field {
                 EditField::Name => EditField::Method,
@@ -143,14 +216,31 @@ fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
             app.input_buffer.pop();
         }
         KeyCode::Enter => {
+            // Save the current field and exit the dialog
             apply_field_edit(app);
-            app.input_buffer.clear();
-            load_current_field_value(app);
-        }
-        KeyCode::Esc => {
             app.input_mode = InputMode::Normal;
             app.input_buffer.clear();
-            app.set_error("Editing cancelled".to_string());
+            app.edit_backup = None;
+            // Save to disk
+            if let Some(conn) = app.current_connection() {
+                let conn_clone = conn.clone();
+                if let Err(e) = app.save_connection(&conn_clone) {
+                    app.set_error(format!("✗ Failed to save: {}", e));
+                } else {
+                    app.set_error("✓ Connection saved".to_string());
+                }
+            }
+        }
+        KeyCode::Esc => {
+            // Discard changes and restore from backup
+            if let Some(backup) = app.edit_backup.take() {
+                if let Some(conn) = app.current_connection_mut() {
+                    *conn = backup;
+                }
+            }
+            app.input_mode = InputMode::Normal;
+            app.input_buffer.clear();
+            app.set_error("✗ Changes discarded".to_string());
         }
         _ => {}
     }
@@ -277,15 +367,24 @@ async fn send_request(app: &mut App, conn: &crate::models::Connection) {
                         body,
                         headers: String::new(),
                     });
-                    app.set_error(format!("✓ Response received ({})", status));
                 }
                 Err(e) => {
-                    app.set_error(format!("Error reading response: {}", e));
+                    let error_msg = format!("Error reading response: {}", e);
+                    app.response = Some(crate::models::ApiResponse {
+                        status: 0,
+                        body: error_msg,
+                        headers: String::new(),
+                    });
                 }
             }
         }
         Err(e) => {
-            app.set_error(format!("Request failed: {}", e));
+            let error_msg = format!("Request failed: {}", e);
+            app.response = Some(crate::models::ApiResponse {
+                status: 0,
+                body: error_msg,
+                headers: String::new(),
+            });
         }
     }
 }

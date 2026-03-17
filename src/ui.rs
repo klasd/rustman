@@ -1,27 +1,36 @@
 use crate::app::App;
+use crate::models::ActivePanel;
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
 
+fn draw_opaque_overlay(f: &mut Frame, area: Rect) {
+    // Create a paragraph filled with spaces to create an opaque background
+    let mut lines = Vec::new();
+    for _ in 0..area.height {
+        let spaces = " ".repeat(area.width as usize);
+        lines.push(Line::from(Span::styled(
+            spaces,
+            Style::default().bg(Color::Black),
+        )));
+    }
+
+    let overlay = Paragraph::new(lines).style(Style::default().bg(Color::Black));
+    f.render_widget(overlay, area);
+}
+
 pub fn draw(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(1)
-        .constraints(
-            [
-                Constraint::Percentage(65),
-                Constraint::Percentage(20),
-                Constraint::Percentage(15),
-            ]
-            .as_ref(),
-        )
+        .constraints([Constraint::Percentage(85), Constraint::Percentage(15)].as_ref())
         .split(f.area());
 
-    // Top section: connections on left, request editor on right
+    // Top section (85%): connections on left, response on right
     let top_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
@@ -30,16 +39,38 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Draw connections list
     draw_connections(f, app, top_chunks[0]);
 
-    // Draw request editor
-    draw_request_editor(f, app, top_chunks[1]);
-
-    // Draw response in middle
-    draw_response(f, app, chunks[1]);
+    // Draw response on the right
+    draw_response(f, app, top_chunks[1]);
 
     // Draw help/shortcuts at the bottom
-    draw_help(f, chunks[2]);
+    draw_help(f, chunks[1]);
 
-    // Draw error message if present (overlay)
+    // Draw modal dialogs (these overlay on top of everything)
+    match app.input_mode {
+        crate::models::InputMode::ConnectionName => {
+            // Draw opaque overlay covering entire screen
+            draw_opaque_overlay(f, f.area());
+            let modal_area = centered_rect(50, 10, f.area());
+            draw_connection_name_dialog(f, app, modal_area);
+        }
+        crate::models::InputMode::EditingConnection => {
+            // Draw opaque overlay covering entire screen
+            draw_opaque_overlay(f, f.area());
+            let modal_area = centered_rect(60, 60, f.area());
+            draw_edit_dialog(f, app, modal_area);
+        }
+        crate::models::InputMode::Connecting => {
+            // Draw opaque overlay covering entire screen
+            draw_opaque_overlay(f, f.area());
+            let modal_area = centered_rect(40, 10, f.area());
+            draw_connecting_dialog(f, app, modal_area);
+        }
+        crate::models::InputMode::Normal => {
+            // No modal in normal mode
+        }
+    }
+
+    // Draw error message if present (overlay at bottom)
     if let Some(error) = &app.error_message {
         let error_text = vec![Line::from(vec![
             Span::styled("⚠ ", Style::default().fg(Color::Red)),
@@ -54,13 +85,40 @@ pub fn draw(f: &mut Frame, app: &App) {
 
         let error_area = Rect {
             x: f.area().width.saturating_sub(50) / 2,
-            y: f.area().height / 2,
+            y: f.area().height.saturating_sub(3),
             width: 50,
             height: 3,
         };
 
         f.render_widget(error_block, error_area);
     }
+}
+
+/// Calculate a centered rectangle with given width and height percentages
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_y) / 2),
+                Constraint::Percentage(percent_y),
+                Constraint::Percentage((100 - percent_y) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_x) / 2),
+                Constraint::Percentage(percent_x),
+                Constraint::Percentage((100 - percent_x) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(popup_layout[1])[1]
 }
 
 fn draw_connections(f: &mut Frame, app: &App, area: Rect) {
@@ -70,8 +128,25 @@ fn draw_connections(f: &mut Frame, app: &App, area: Rect) {
         .map(|conn| ListItem::new(conn.name.as_str()))
         .collect();
 
+    // Show visual indicator if this panel is active
+    let title = if app.active_panel == ActivePanel::Connections {
+        "◆ Connections ◆"
+    } else {
+        "Connections"
+    };
+
     let list = List::new(connections)
-        .block(Block::default().title("Connections").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(title)
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(if app.active_panel == ActivePanel::Connections {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::White)
+                }),
+        )
         .style(Style::default().fg(Color::White))
         .highlight_style(
             Style::default()
@@ -85,93 +160,12 @@ fn draw_connections(f: &mut Frame, app: &App, area: Rect) {
     f.render_stateful_widget(list, area, &mut state);
 }
 
-fn draw_request_editor(f: &mut Frame, app: &App, area: Rect) {
-    // Check if we're in edit mode or creating new connection
-    match app.input_mode {
-        crate::models::InputMode::EditingConnection => {
-            draw_edit_dialog(f, app, area);
-        }
-        crate::models::InputMode::ConnectionName => {
-            draw_connection_name_dialog(f, app, area);
-        }
-        crate::models::InputMode::Connecting => {
-            draw_connecting_dialog(f, app, area);
-        }
-        crate::models::InputMode::Normal => {
-            draw_connection_view(f, app, area);
-        }
-    }
-}
-
-fn draw_connection_view(f: &mut Frame, app: &App, area: Rect) {
-    let mut text = if let Some(conn) = app.current_connection() {
-        vec![
-            Line::from(vec![
-                Span::styled(
-                    "Name: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(&conn.name),
-            ]),
-            Line::from(vec![
-                Span::styled("Method: ", Style::default().fg(Color::Cyan)),
-                Span::raw(&conn.method),
-            ]),
-            Line::from(vec![
-                Span::styled("URL: ", Style::default().fg(Color::Cyan)),
-                Span::raw(&conn.url),
-            ]),
-            Line::from(vec![
-                Span::styled("Port: ", Style::default().fg(Color::Cyan)),
-                Span::raw(conn.port.to_string()),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
-                "Query Parameters:",
-                Style::default().fg(Color::Cyan),
-            )),
-        ]
-    } else {
-        vec![Line::from(
-            "No connection selected - Press 'n' to create one",
-        )]
-    };
-
-    // Add connection details if exists
-    if let Some(conn) = app.current_connection() {
-        for (key, value) in &conn.query_params {
-            text.push(Line::from(format!("  {}: {}", key, value)));
-        }
-
-        text.push(Line::from(""));
-        text.push(Line::from(Span::styled(
-            "Payload:",
-            Style::default().fg(Color::Cyan),
-        )));
-
-        if let Some(payload) = &conn.payload {
-            text.push(Line::from(payload.as_str()));
-        }
-    }
-
-    // Show help text
-    text.push(Line::from(""));
-    text.push(Line::from(vec![
-        Span::styled("Press 'e' to edit | ", Style::default().fg(Color::DarkGray)),
-        Span::styled("'r' to send | ", Style::default().fg(Color::DarkGray)),
-        Span::styled("'s' to save", Style::default().fg(Color::DarkGray)),
-    ]));
-
-    let paragraph =
-        Paragraph::new(text).block(Block::default().title("Request").borders(Borders::ALL));
-
-    f.render_widget(paragraph, area);
-}
-
 fn draw_connection_name_dialog(f: &mut Frame, app: &App, area: Rect) {
-    let mut text = vec![
+    // Draw opaque background
+    let background = Block::default().style(Style::default().bg(Color::Black));
+    f.render_widget(background, area);
+
+    let text = vec![
         Line::from(Span::styled(
             "─ Create New Connection ─",
             Style::default()
@@ -179,10 +173,16 @@ fn draw_connection_name_dialog(f: &mut Frame, app: &App, area: Rect) {
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
-        Line::from(Span::raw("Connection Name:")),
         Line::from(Span::styled(
-            format!("> {}_", app.input_buffer),
-            Style::default().fg(Color::Yellow).bg(Color::DarkGray),
+            "Connection Name:",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(Span::styled(
+            app.input_buffer.clone(),
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(vec![
@@ -202,13 +202,22 @@ fn draw_connection_name_dialog(f: &mut Frame, app: &App, area: Rect) {
     ];
 
     let paragraph = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL))
-        .style(Style::default().fg(Color::White));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("New Connection")
+                .style(Style::default().fg(Color::White).bg(Color::Black)),
+        )
+        .style(Style::default().bg(Color::Black));
 
     f.render_widget(paragraph, area);
 }
 
 fn draw_connecting_dialog(f: &mut Frame, app: &App, area: Rect) {
+    // Draw opaque background
+    let background = Block::default().style(Style::default().bg(Color::Black));
+    f.render_widget(background, area);
+
     let text = vec![
         Line::from(Span::styled(
             "─ Connecting... ─",
@@ -223,7 +232,10 @@ fn draw_connecting_dialog(f: &mut Frame, app: &App, area: Rect) {
         )),
         Line::from(""),
         if let Some(conn) = app.current_connection() {
-            Line::from(format!("{}:{}", conn.url, conn.port))
+            Line::from(Span::styled(
+                format!("{}:{}", conn.url, conn.port),
+                Style::default().fg(Color::White),
+            ))
         } else {
             Line::from("")
         },
@@ -243,22 +255,33 @@ fn draw_connecting_dialog(f: &mut Frame, app: &App, area: Rect) {
     ];
 
     let paragraph = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL))
-        .style(Style::default().fg(Color::White));
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .style(Style::default().bg(Color::Black)),
+        )
+        .style(Style::default().fg(Color::White).bg(Color::Black));
 
     f.render_widget(paragraph, area);
 }
 
 fn draw_edit_dialog(f: &mut Frame, app: &App, area: Rect) {
     if let Some(conn) = app.current_connection() {
+        // Draw opaque background with borders
+        let background = Block::default()
+            .borders(Borders::ALL)
+            .style(Style::default().bg(Color::Black).fg(Color::Black));
+        f.render_widget(background, area);
+
         let mut text = vec![
             Line::from(Span::styled(
                 "─ Edit Connection ─",
                 Style::default()
                     .fg(Color::Yellow)
+                    .bg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             )),
-            Line::from(""),
+            Line::from(Span::styled("", Style::default().bg(Color::Black))),
         ];
 
         // Name field
@@ -293,44 +316,55 @@ fn draw_edit_dialog(f: &mut Frame, app: &App, area: Rect) {
             matches!(app.edit_field, crate::models::EditField::Method),
         ));
 
-        text.push(Line::from(""));
+        text.push(Line::from(Span::styled(
+            "",
+            Style::default().bg(Color::Black),
+        )));
         text.push(Line::from(vec![
             Span::styled(
                 "Tab",
                 Style::default()
                     .fg(Color::Green)
+                    .bg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" next field  |  "),
+            Span::styled(" save & next field  |  ", Style::default().bg(Color::Black)),
             Span::styled(
                 "Shift+Tab",
                 Style::default()
                     .fg(Color::Green)
+                    .bg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" prev field"),
+            Span::styled(" save & prev", Style::default().bg(Color::Black)),
         ]));
         text.push(Line::from(vec![
             Span::styled(
                 "Enter",
                 Style::default()
                     .fg(Color::Green)
+                    .bg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" confirm  |  "),
+            Span::styled(" save & exit  |  ", Style::default().bg(Color::Black)),
             Span::styled(
                 "Esc",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Red)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" cancel"),
+            Span::styled(" discard", Style::default().bg(Color::Black)),
         ]));
 
-        let paragraph = Paragraph::new(text).block(
-            Block::default()
-                .title("Edit Connection")
-                .borders(Borders::ALL)
-                .style(Style::default().fg(Color::Yellow)),
-        );
+        let paragraph = Paragraph::new(text)
+            .block(
+                Block::default()
+                    .title("Edit Connection")
+                    .borders(Borders::ALL)
+                    .style(Style::default().fg(Color::Yellow).bg(Color::Black)),
+            )
+            .style(Style::default().bg(Color::Black));
 
         f.render_widget(paragraph, area);
     }
@@ -348,7 +382,7 @@ fn draw_edit_field(
             .bg(Color::DarkGray)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(Color::Cyan).bg(Color::Black)
     };
 
     let value = if is_active {
@@ -363,19 +397,42 @@ fn draw_edit_field(
     Line::from(Span::styled(format!("{}{}", label_text, value_text), style))
 }
 
-fn format_mode(mode: &crate::models::InputMode) -> String {
-    match mode {
-        crate::models::InputMode::Normal => "Normal".to_string(),
-        crate::models::InputMode::ConnectionName => "Creating Connection Name".to_string(),
-        crate::models::InputMode::EditingConnection => "Editing Connection".to_string(),
-        crate::models::InputMode::Connecting => "Connecting...".to_string(),
-    }
-}
-
 fn draw_response(f: &mut Frame, app: &App, area: Rect) {
-    let mut text = if let Some(response) = &app.response {
-        let mut lines = vec![
-            Line::from(vec![
+    let text = if let Some(response) = &app.response {
+        let mut lines = vec![];
+
+        // Show connection info at the top
+        if let Some(conn) = app.current_connection() {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "Connection: ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(conn.name.clone()),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "URL: ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(format!("{}:{}", conn.url, conn.port)),
+            ]));
+            lines.push(Line::from(""));
+        }
+
+        // Show error indicator if status is 0 (error)
+        if response.status == 0 {
+            lines.push(Line::from(Span::styled(
+                "❌ ERROR",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(""));
+        } else {
+            lines.push(Line::from(vec![
                 Span::styled(
                     "Status: ",
                     Style::default()
@@ -383,15 +440,15 @@ fn draw_response(f: &mut Frame, app: &App, area: Rect) {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(response.status.to_string()),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled(
+            ]));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
                 "Body:",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
-            )),
-        ];
+            )));
+        }
 
         // Try to format as JSON if it looks like JSON
         let body = if response.body.trim().starts_with('{') || response.body.trim().starts_with('[')
@@ -421,7 +478,21 @@ fn draw_response(f: &mut Frame, app: &App, area: Rect) {
     };
 
     let paragraph = Paragraph::new(text)
-        .block(Block::default().title("Response").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title(if app.active_panel == ActivePanel::Response {
+                    "◆ Response ◆ (j/k to scroll, Tab to switch)"
+                } else {
+                    "Response (j/k to scroll, Tab to switch)"
+                })
+                .title_alignment(Alignment::Center)
+                .borders(Borders::ALL)
+                .border_style(if app.active_panel == ActivePanel::Response {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::White)
+                }),
+        )
         .scroll((app.scroll_response, 0));
 
     f.render_widget(paragraph, area);
@@ -483,7 +554,7 @@ fn draw_help(f: &mut Frame, area: Rect) {
     let help_text = vec![
         Line::from(vec![
             Span::styled(
-                "Controls: ",
+                "Main: ",
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
@@ -498,24 +569,33 @@ fn draw_help(f: &mut Frame, area: Rect) {
             Span::styled("-send ", Style::default().fg(Color::DarkGray)),
             Span::raw("s"),
             Span::styled("-save ", Style::default().fg(Color::DarkGray)),
+            Span::raw("p/Tab"),
+            Span::styled("-switch panel ", Style::default().fg(Color::DarkGray)),
             Span::raw("↑↓"),
             Span::styled("-navigate ", Style::default().fg(Color::DarkGray)),
-            Span::raw("PgUp/PgDn"),
-            Span::styled("-scroll response ", Style::default().fg(Color::DarkGray)),
-            Span::raw("Ctrl+Q"),
-            Span::styled("-quit", Style::default().fg(Color::DarkGray)),
         ]),
         Line::from(vec![
             Span::styled(
-                "Edit mode: ",
+                "Scroll: ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("j/k"),
+            Span::styled("-vim scroll ", Style::default().fg(Color::DarkGray)),
+            Span::raw("PgUp/PgDn"),
+            Span::styled("-page ", Style::default().fg(Color::DarkGray)),
+            Span::raw("Home/End"),
+            Span::styled("-jump ", Style::default().fg(Color::DarkGray)),
+            Span::styled("  |  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Edit: ",
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw("Tab"),
-            Span::styled("-next field ", Style::default().fg(Color::DarkGray)),
-            Span::raw("Shift+Tab"),
-            Span::styled("-prev field ", Style::default().fg(Color::DarkGray)),
+            Span::styled("-field ", Style::default().fg(Color::DarkGray)),
             Span::raw("Enter"),
             Span::styled("-confirm ", Style::default().fg(Color::DarkGray)),
             Span::raw("Esc"),
