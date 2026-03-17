@@ -217,13 +217,20 @@ fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
         }
         KeyCode::Enter => {
             // Save the current field and exit the dialog
+            let old_name = app.edit_backup.as_ref().map(|b| b.name.clone());
             apply_field_edit(app);
             app.input_mode = InputMode::Normal;
             app.input_buffer.clear();
             app.edit_backup = None;
-            // Save to disk
+            // Save to disk, and delete old file if name changed
             if let Some(conn) = app.current_connection() {
                 let conn_clone = conn.clone();
+                // Delete old file if the name changed
+                if let Some(old) = old_name {
+                    if old != conn_clone.name {
+                        let _ = app.delete_connection_file(&old);
+                    }
+                }
                 if let Err(e) = app.save_connection(&conn_clone) {
                     app.set_error(format!("✗ Failed to save: {}", e));
                 } else {

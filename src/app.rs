@@ -92,6 +92,13 @@ impl App {
         Ok(())
     }
 
+    pub fn delete_connection_file(&self, name: &str) -> Result<()> {
+        let config_dir = Self::get_config_dir()?;
+        let file_path = config_dir.join(format!("{}.json", name));
+        fs::remove_file(file_path)?;
+        Ok(())
+    }
+
     pub fn load_connection(name: &str) -> Result<Connection> {
         let config_dir = Self::get_config_dir()?;
         let file_path = config_dir.join(format!("{}.json", name));

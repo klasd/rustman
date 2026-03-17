@@ -50,7 +50,7 @@ pub fn draw(f: &mut Frame, app: &App) {
         crate::models::InputMode::ConnectionName => {
             // Draw opaque overlay covering entire screen
             draw_opaque_overlay(f, f.area());
-            let modal_area = centered_rect(50, 10, f.area());
+            let modal_area = fixed_rect(50, 10, f.area());
             draw_connection_name_dialog(f, app, modal_area);
         }
         crate::models::InputMode::EditingConnection => {
@@ -91,6 +91,18 @@ pub fn draw(f: &mut Frame, app: &App) {
         };
 
         f.render_widget(error_block, error_area);
+    }
+}
+
+/// Calculate a centered rectangle with given fixed width and height in characters
+fn fixed_rect(width: u16, height: u16, r: Rect) -> Rect {
+    let x = r.x + r.width.saturating_sub(width) / 2;
+    let y = r.y + r.height.saturating_sub(height) / 2;
+    Rect {
+        x,
+        y,
+        width: width.min(r.width),
+        height: height.min(r.height),
     }
 }
 
@@ -161,27 +173,30 @@ fn draw_connections(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_connection_name_dialog(f: &mut Frame, app: &App, area: Rect) {
-    // Draw opaque background
-    let background = Block::default().style(Style::default().bg(Color::Black));
-    f.render_widget(background, area);
+    // The opaque overlay is already drawn by the caller; just render the dialog.
+
+    // Build the input line: pad to fill the inner width, append a block cursor
+    let inner_width = area.width.saturating_sub(4) as usize; // 2 border + 2 padding
+    let input_with_cursor = format!("{}_", app.input_buffer);
+    let padded = format!(
+        "{:<width$}",
+        input_with_cursor,
+        width = inner_width.max(input_with_cursor.len())
+    );
 
     let text = vec![
         Line::from(Span::styled(
-            "─ Create New Connection ─",
+            "Connection Name:",
             Style::default()
-                .fg(Color::Green)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "Connection Name:",
-            Style::default().fg(Color::White),
-        )),
-        Line::from(Span::styled(
-            app.input_buffer.clone(),
+            padded,
             Style::default()
-                .fg(Color::White)
-                .bg(Color::Blue)
+                .fg(Color::Black)
+                .bg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -192,12 +207,12 @@ fn draw_connection_name_dialog(f: &mut Frame, app: &App, area: Rect) {
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" create  |  "),
+            Span::styled(" create  |  ", Style::default().fg(Color::White)),
             Span::styled(
                 "Esc",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
-            Span::raw(" cancel"),
+            Span::styled(" cancel", Style::default().fg(Color::White)),
         ]),
     ];
 
@@ -205,8 +220,10 @@ fn draw_connection_name_dialog(f: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("New Connection")
-                .style(Style::default().fg(Color::White).bg(Color::Black)),
+                .title(" New Connection ")
+                .title_alignment(Alignment::Center)
+                .border_style(Style::default().fg(Color::Green))
+                .style(Style::default().bg(Color::Black)),
         )
         .style(Style::default().bg(Color::Black));
 
@@ -376,25 +393,35 @@ fn draw_edit_field(
     input_buffer: &str,
     is_active: bool,
 ) -> Line<'static> {
-    let style = if is_active {
-        Style::default()
-            .fg(Color::White)
-            .bg(Color::DarkGray)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Cyan).bg(Color::Black)
-    };
-
-    let value = if is_active {
-        input_buffer.to_string()
-    } else {
-        current_value.to_string()
-    };
-
     let label_text = format!("{:<10}", format!("{}:", label));
-    let value_text = format!("[{}]", value);
 
-    Line::from(Span::styled(format!("{}{}", label_text, value_text), style))
+    if is_active {
+        // Show input buffer with a block cursor so it's always visible
+        let input_with_cursor = format!("{}_", input_buffer);
+        let value_text = format!("[{}]", input_with_cursor);
+        Line::from(vec![
+            Span::styled(
+                label_text,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                value_text,
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])
+    } else {
+        let value_text = format!("[{}]", current_value);
+        Line::from(Span::styled(
+            format!("{}{}", label_text, value_text),
+            Style::default().fg(Color::DarkGray).bg(Color::Black),
+        ))
+    }
 }
 
 fn draw_response(f: &mut Frame, app: &App, area: Rect) {
@@ -567,8 +594,6 @@ fn draw_help(f: &mut Frame, area: Rect) {
             Span::styled("-delete ", Style::default().fg(Color::DarkGray)),
             Span::raw("r"),
             Span::styled("-send ", Style::default().fg(Color::DarkGray)),
-            Span::raw("s"),
-            Span::styled("-save ", Style::default().fg(Color::DarkGray)),
             Span::raw("p/Tab"),
             Span::styled("-switch panel ", Style::default().fg(Color::DarkGray)),
             Span::raw("↑↓"),
