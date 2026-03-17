@@ -30,17 +30,26 @@ pub fn draw(f: &mut Frame, app: &App) {
         .constraints([Constraint::Percentage(85), Constraint::Percentage(15)].as_ref())
         .split(f.area());
 
-    // Top section (85%): connections on left, response on right
+    // Top section (85%): connections on left, right column on right
     let top_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
         .split(chunks[0]);
 
+    // Right column: connection info on top (fixed 5 rows), response below
+    let right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(5), Constraint::Min(0)])
+        .split(top_chunks[1]);
+
     // Draw connections list
     draw_connections(f, app, top_chunks[0]);
 
-    // Draw response on the right
-    draw_response(f, app, top_chunks[1]);
+    // Draw connection info panel (always reflects selected connection)
+    draw_connection_info(f, app, right_chunks[0]);
+
+    // Draw response below
+    draw_response(f, app, right_chunks[1]);
 
     // Draw help/shortcuts at the bottom
     draw_help(f, chunks[1]);
@@ -424,37 +433,68 @@ fn draw_edit_field(
     }
 }
 
+fn draw_connection_info(f: &mut Frame, app: &App, area: Rect) {
+    let content = if let Some(conn) = app.current_connection() {
+        vec![
+            Line::from(vec![
+                Span::styled(
+                    "Name:   ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    conn.name.clone(),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "URL:    ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(conn.full_url()),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "Method: ",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(conn.method.clone(), Style::default().fg(Color::Yellow)),
+            ]),
+        ]
+    } else {
+        vec![Line::from(Span::styled(
+            "No connection selected",
+            Style::default().fg(Color::DarkGray),
+        ))]
+    };
+
+    let paragraph = Paragraph::new(content).block(
+        Block::default()
+            .title(" Connection ")
+            .title_alignment(Alignment::Left)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray)),
+    );
+
+    f.render_widget(paragraph, area);
+}
+
 fn draw_response(f: &mut Frame, app: &App, area: Rect) {
     let text = if let Some(response) = &app.response {
         let mut lines = vec![];
 
-        // Show connection info at the top
-        if let Some(conn) = app.current_connection() {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "Connection: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(conn.name.clone()),
-            ]));
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "URL: ",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(format!("{}:{}", conn.url, conn.port)),
-            ]));
-            lines.push(Line::from(""));
-        }
-
         // Show error indicator if status is 0 (error)
         if response.status == 0 {
             lines.push(Line::from(Span::styled(
-                "❌ ERROR",
+                "ERROR",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
