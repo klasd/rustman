@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub const HTTP_METHODS: &[&str] = &["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Connection {
     pub name: String,
@@ -45,6 +47,7 @@ pub enum InputMode {
     Normal,
     ConnectionName,
     EditingConnection,
+    EditingPayload,
     Connecting,
 }
 
@@ -54,12 +57,13 @@ pub enum ActivePanel {
     Response,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EditField {
     Name,
     Url,
     Port,
     Method,
+    Payload,
 }
 
 #[derive(Debug, Clone)]

@@ -68,6 +68,12 @@ pub fn draw(f: &mut Frame, app: &App) {
             let modal_area = centered_rect(60, 60, f.area());
             draw_edit_dialog(f, app, modal_area);
         }
+        crate::models::InputMode::EditingPayload => {
+            // Draw opaque overlay covering entire screen
+            draw_opaque_overlay(f, f.area());
+            let modal_area = centered_rect(80, 80, f.area());
+            draw_payload_editor(f, app, modal_area);
+        }
         crate::models::InputMode::Connecting => {
             // Draw opaque overlay covering entire screen
             draw_opaque_overlay(f, f.area());
@@ -334,12 +340,17 @@ fn draw_edit_dialog(f: &mut Frame, app: &App, area: Rect) {
             matches!(app.edit_field, crate::models::EditField::Port),
         ));
 
-        // Method field
-        text.push(draw_edit_field(
-            "Method",
+        // Method field (dropdown/combo box style)
+        text.push(draw_method_dropdown(
             &conn.method,
-            &app.input_buffer,
+            app.current_method(),
             matches!(app.edit_field, crate::models::EditField::Method),
+        ));
+
+        // Payload field (shows preview, Enter to edit)
+        text.push(draw_payload_field(
+            conn.payload.as_deref(),
+            matches!(app.edit_field, crate::models::EditField::Payload),
         ));
 
         text.push(Line::from(Span::styled(
@@ -354,7 +365,7 @@ fn draw_edit_dialog(f: &mut Frame, app: &App, area: Rect) {
                     .bg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" save & next field  |  ", Style::default().bg(Color::Black)),
+            Span::styled(" next  |  ", Style::default().bg(Color::Black)),
             Span::styled(
                 "Shift+Tab",
                 Style::default()
@@ -362,7 +373,15 @@ fn draw_edit_dialog(f: &mut Frame, app: &App, area: Rect) {
                     .bg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" save & prev", Style::default().bg(Color::Black)),
+            Span::styled(" prev  |  ", Style::default().bg(Color::Black)),
+            Span::styled(
+                "</>",
+                Style::default()
+                    .fg(Color::Green)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" method", Style::default().bg(Color::Black)),
         ]));
         text.push(Line::from(vec![
             Span::styled(
@@ -372,7 +391,7 @@ fn draw_edit_dialog(f: &mut Frame, app: &App, area: Rect) {
                     .bg(Color::Black)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" save & exit  |  ", Style::default().bg(Color::Black)),
+            Span::styled(" save/edit payload  |  ", Style::default().bg(Color::Black)),
             Span::styled(
                 "Esc",
                 Style::default()
@@ -394,6 +413,186 @@ fn draw_edit_dialog(f: &mut Frame, app: &App, area: Rect) {
 
         f.render_widget(paragraph, area);
     }
+}
+
+fn draw_payload_editor(f: &mut Frame, app: &App, area: Rect) {
+    // Draw background
+    let background = Block::default()
+        .borders(Borders::ALL)
+        .title("Edit Payload")
+        .style(Style::default().fg(Color::Cyan).bg(Color::Black));
+    f.render_widget(background, area);
+
+    // Calculate inner area for content
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+
+    // Reserve space for help text at the bottom
+    let help_height = 2;
+    let editor_height = inner.height.saturating_sub(help_height);
+
+    let editor_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: editor_height,
+    };
+
+    let help_area = Rect {
+        x: inner.x,
+        y: inner.y + editor_height,
+        width: inner.width,
+        height: help_height,
+    };
+
+    // Calculate visible lines based on scroll
+    let visible_lines = editor_height as usize;
+    let total_lines = app.payload_lines.len();
+
+    // Auto-scroll to keep cursor visible
+    let scroll = if app.payload_cursor_row < app.payload_scroll {
+        app.payload_cursor_row
+    } else if app.payload_cursor_row >= app.payload_scroll + visible_lines {
+        app.payload_cursor_row - visible_lines + 1
+    } else {
+        app.payload_scroll
+    };
+
+    // Build text lines with cursor
+    let mut text_lines: Vec<Line> = Vec::new();
+    for (idx, line) in app
+        .payload_lines
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(visible_lines)
+    {
+        let is_cursor_line = idx == app.payload_cursor_row;
+
+        if is_cursor_line {
+            // Show line with cursor
+            let col = app.payload_cursor_col.min(line.len());
+            let before = &line[..col];
+            let cursor_char = line
+                .chars()
+                .nth(col)
+                .map(|c| c.to_string())
+                .unwrap_or(" ".to_string());
+            let after = if col < line.len() {
+                &line[col + 1..]
+            } else {
+                ""
+            };
+
+            text_lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{:3} ", idx + 1),
+                    Style::default().fg(Color::DarkGray).bg(Color::Black),
+                ),
+                Span::styled(
+                    before.to_string(),
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+                Span::styled(
+                    cursor_char,
+                    Style::default().fg(Color::Black).bg(Color::White),
+                ),
+                Span::styled(
+                    after.to_string(),
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+            ]));
+        } else {
+            // Regular line
+            text_lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{:3} ", idx + 1),
+                    Style::default().fg(Color::DarkGray).bg(Color::Black),
+                ),
+                Span::styled(
+                    line.clone(),
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+            ]));
+        }
+    }
+
+    // Fill remaining lines if needed
+    while text_lines.len() < visible_lines {
+        text_lines.push(Line::from(Span::styled(
+            "~",
+            Style::default().fg(Color::DarkGray).bg(Color::Black),
+        )));
+    }
+
+    let editor_widget = Paragraph::new(text_lines).style(Style::default().bg(Color::Black));
+    f.render_widget(editor_widget, editor_area);
+
+    // Draw help text
+    let help_text = vec![
+        Line::from(vec![
+            Span::styled(
+                "F2",
+                Style::default()
+                    .fg(Color::Green)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " save  |  ",
+                Style::default().fg(Color::White).bg(Color::Black),
+            ),
+            Span::styled(
+                "Esc",
+                Style::default()
+                    .fg(Color::Red)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " cancel  |  ",
+                Style::default().fg(Color::White).bg(Color::Black),
+            ),
+            Span::styled(
+                "Arrows",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " navigate  |  ",
+                Style::default().fg(Color::White).bg(Color::Black),
+            ),
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " newline",
+                Style::default().fg(Color::White).bg(Color::Black),
+            ),
+        ]),
+        Line::from(vec![Span::styled(
+            format!(
+                "Line {}, Col {} | {} lines total",
+                app.payload_cursor_row + 1,
+                app.payload_cursor_col + 1,
+                total_lines
+            ),
+            Style::default().fg(Color::DarkGray).bg(Color::Black),
+        )]),
+    ];
+
+    let help_widget = Paragraph::new(help_text).style(Style::default().bg(Color::Black));
+    f.render_widget(help_widget, help_area);
 }
 
 fn draw_edit_field(
@@ -426,6 +625,86 @@ fn draw_edit_field(
         ])
     } else {
         let value_text = format!("[{}]", current_value);
+        Line::from(Span::styled(
+            format!("{}{}", label_text, value_text),
+            Style::default().fg(Color::DarkGray).bg(Color::Black),
+        ))
+    }
+}
+
+fn draw_method_dropdown(
+    current_value: &str,
+    selected_method: &str,
+    is_active: bool,
+) -> Line<'static> {
+    let label_text = format!("{:<10}", "Method:");
+
+    if is_active {
+        // Show dropdown style with arrows: [< METHOD >]
+        let value_text = format!("[< {} >]", selected_method);
+        Line::from(vec![
+            Span::styled(
+                label_text,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                value_text,
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])
+    } else {
+        let value_text = format!("[{}]", current_value);
+        Line::from(Span::styled(
+            format!("{}{}", label_text, value_text),
+            Style::default().fg(Color::DarkGray).bg(Color::Black),
+        ))
+    }
+}
+
+fn draw_payload_field(payload: Option<&str>, is_active: bool) -> Line<'static> {
+    let label_text = format!("{:<10}", "Payload:");
+
+    let preview = match payload {
+        Some(p) if !p.is_empty() => {
+            // Show truncated preview
+            let first_line = p.lines().next().unwrap_or("");
+            if first_line.len() > 25 {
+                format!("{}...", &first_line[..25])
+            } else if p.lines().count() > 1 {
+                format!("{}...", first_line)
+            } else {
+                first_line.to_string()
+            }
+        }
+        _ => "(empty)".to_string(),
+    };
+
+    if is_active {
+        let value_text = format!("[{} - Enter to edit]", preview);
+        Line::from(vec![
+            Span::styled(
+                label_text,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                value_text,
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])
+    } else {
+        let value_text = format!("[{}]", preview);
         Line::from(Span::styled(
             format!("{}{}", label_text, value_text),
             Style::default().fg(Color::DarkGray).bg(Color::Black),

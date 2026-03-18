@@ -7,6 +7,7 @@ pub async fn handle_input(app: &mut App, key: KeyEvent) {
         InputMode::Normal => handle_normal_mode(app, key).await,
         InputMode::ConnectionName => handle_connection_name_input(app, key),
         InputMode::EditingConnection => handle_edit_dialog_input(app, key),
+        InputMode::EditingPayload => handle_payload_editor_input(app, key),
         InputMode::Connecting => handle_connecting_mode(app, key),
     }
 }
@@ -25,7 +26,10 @@ async fn handle_normal_mode(app: &mut App, key: KeyEvent) {
         KeyCode::Char('e') => {
             if let Some(conn) = app.current_connection() {
                 // Save a backup of the current connection
-                app.edit_backup = Some(conn.clone());
+                let backup = conn.clone();
+                // Initialize method_index from current connection's method
+                app.method_index = App::method_index_from_string(&backup.method);
+                app.edit_backup = Some(backup);
                 app.input_mode = InputMode::EditingConnection;
                 app.edit_field = EditField::Name;
                 app.input_buffer.clear();
@@ -182,6 +186,9 @@ fn handle_connection_name_input(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
+    let is_method_field = matches!(app.edit_field, EditField::Method);
+    let is_payload_field = matches!(app.edit_field, EditField::Payload);
+    
     match key.code {
         KeyCode::Tab => {
             // Save the current field before moving to next
@@ -191,7 +198,8 @@ fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
                 EditField::Name => EditField::Url,
                 EditField::Url => EditField::Port,
                 EditField::Port => EditField::Method,
-                EditField::Method => EditField::Name,
+                EditField::Method => EditField::Payload,
+                EditField::Payload => EditField::Name,
             };
             app.input_buffer.clear();
             load_current_field_value(app);
@@ -201,19 +209,33 @@ fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
             apply_field_edit(app);
             // Move to previous field
             app.edit_field = match app.edit_field {
-                EditField::Name => EditField::Method,
+                EditField::Name => EditField::Payload,
                 EditField::Url => EditField::Name,
                 EditField::Port => EditField::Url,
                 EditField::Method => EditField::Port,
+                EditField::Payload => EditField::Method,
             };
             app.input_buffer.clear();
             load_current_field_value(app);
         }
-        KeyCode::Char(c) => {
+        KeyCode::Left if is_method_field => {
+            app.prev_method();
+        }
+        KeyCode::Right if is_method_field => {
+            app.next_method();
+        }
+        KeyCode::Char(c) if !is_method_field && !is_payload_field => {
             app.input_buffer.push(c);
         }
-        KeyCode::Backspace => {
+        KeyCode::Backspace if !is_method_field && !is_payload_field => {
             app.input_buffer.pop();
+        }
+        KeyCode::Enter if is_payload_field => {
+            // Open payload editor
+            let payload = app.current_connection()
+                .and_then(|c| c.payload.clone());
+            app.init_payload_editor(payload.as_deref());
+            app.input_mode = InputMode::EditingPayload;
         }
         KeyCode::Enter => {
             // Save the current field and exit the dialog
@@ -266,7 +288,10 @@ fn load_current_field_value(app: &mut App) {
                 app.input_buffer = conn.port.to_string();
             }
             EditField::Method => {
-                app.input_buffer = conn.method.clone();
+                app.method_index = App::method_index_from_string(&conn.method);
+            }
+            EditField::Payload => {
+                // Payload doesn't use input_buffer, it uses the payload editor
             }
         }
     }
@@ -275,6 +300,7 @@ fn load_current_field_value(app: &mut App) {
 fn apply_field_edit(app: &mut App) {
     let edit_field = app.edit_field.clone();
     let input_buffer = app.input_buffer.clone();
+    let current_method = app.current_method().to_string();
     
     if let Some(conn) = app.current_connection_mut() {
         match edit_field {
@@ -299,15 +325,72 @@ fn apply_field_edit(app: &mut App) {
                 }
             }
             EditField::Method => {
-                let method = input_buffer.to_uppercase();
-                if matches!(method.as_str(), "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS") {
-                    conn.method = method.clone();
-                    app.set_error(format!("✓ Method updated: {}", method));
-                } else {
-                    app.set_error(format!("✗ Invalid method: {}", method));
-                }
+                conn.method = current_method.clone();
+                app.set_error(format!("✓ Method updated: {}", current_method));
+            }
+            EditField::Payload => {
+                // Payload is edited in its own editor mode, not here
             }
         }
+    }
+}
+
+fn handle_payload_editor_input(app: &mut App, key: KeyEvent) {
+    match key.code {
+        KeyCode::Esc => {
+            // Discard changes and go back to edit dialog
+            app.input_mode = InputMode::EditingConnection;
+            app.set_error("✗ Payload changes discarded".to_string());
+        }
+        KeyCode::F(2) => {
+            // Save payload and go back to edit dialog
+            let payload = app.payload_to_string();
+            if let Some(conn) = app.current_connection_mut() {
+                conn.payload = payload.clone();
+            }
+            app.input_mode = InputMode::EditingConnection;
+            if payload.is_some() {
+                app.set_error("✓ Payload saved".to_string());
+            } else {
+                app.set_error("✓ Payload cleared".to_string());
+            }
+        }
+        KeyCode::Up => {
+            app.payload_move_up();
+        }
+        KeyCode::Down => {
+            app.payload_move_down();
+        }
+        KeyCode::Left => {
+            app.payload_move_left();
+        }
+        KeyCode::Right => {
+            app.payload_move_right();
+        }
+        KeyCode::Home => {
+            app.payload_move_home();
+        }
+        KeyCode::End => {
+            app.payload_move_end();
+        }
+        KeyCode::Enter => {
+            app.payload_newline();
+        }
+        KeyCode::Backspace => {
+            app.payload_backspace();
+        }
+        KeyCode::Delete => {
+            app.payload_delete();
+        }
+        KeyCode::Tab => {
+            // Insert 2 spaces for indentation
+            app.payload_insert_char(' ');
+            app.payload_insert_char(' ');
+        }
+        KeyCode::Char(c) => {
+            app.payload_insert_char(c);
+        }
+        _ => {}
     }
 }
 

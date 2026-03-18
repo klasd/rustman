@@ -1,4 +1,4 @@
-use crate::models::{ActivePanel, ApiResponse, Connection, EditField, InputMode};
+use crate::models::{ActivePanel, ApiResponse, Connection, EditField, InputMode, HTTP_METHODS};
 use anyhow::Result;
 use std::fs;
 use std::path::PathBuf;
@@ -17,6 +17,12 @@ pub struct App {
     pub request_cancel_tx: Option<oneshot::Sender<()>>,
     pub active_panel: ActivePanel,
     pub edit_backup: Option<Connection>,
+    pub method_index: usize,
+    // Payload editor state
+    pub payload_lines: Vec<String>,
+    pub payload_cursor_row: usize,
+    pub payload_cursor_col: usize,
+    pub payload_scroll: usize,
 }
 
 impl App {
@@ -56,6 +62,11 @@ impl App {
             request_cancel_tx: None,
             active_panel: ActivePanel::Connections,
             edit_backup: None,
+            method_index: 0,
+            payload_lines: vec![String::new()],
+            payload_cursor_row: 0,
+            payload_cursor_col: 0,
+            payload_scroll: 0,
         };
 
         // Load all saved connections from JSON files
@@ -175,5 +186,162 @@ impl App {
         }
         self.input_mode = InputMode::Normal;
         self.set_error("Request cancelled".to_string());
+    }
+
+    pub fn method_index_from_string(method: &str) -> usize {
+        HTTP_METHODS
+            .iter()
+            .position(|&m| m == method.to_uppercase())
+            .unwrap_or(0)
+    }
+
+    pub fn current_method(&self) -> &'static str {
+        HTTP_METHODS[self.method_index]
+    }
+
+    pub fn next_method(&mut self) {
+        self.method_index = (self.method_index + 1) % HTTP_METHODS.len();
+    }
+
+    pub fn prev_method(&mut self) {
+        self.method_index = if self.method_index == 0 {
+            HTTP_METHODS.len() - 1
+        } else {
+            self.method_index - 1
+        };
+    }
+
+    // Payload editor helpers
+    pub fn init_payload_editor(&mut self, payload: Option<&str>) {
+        let content = payload.unwrap_or("");
+        self.payload_lines = if content.is_empty() {
+            vec![String::new()]
+        } else {
+            content.lines().map(|s| s.to_string()).collect()
+        };
+        if self.payload_lines.is_empty() {
+            self.payload_lines.push(String::new());
+        }
+        self.payload_cursor_row = 0;
+        self.payload_cursor_col = 0;
+        self.payload_scroll = 0;
+    }
+
+    pub fn payload_to_string(&self) -> Option<String> {
+        let content = self.payload_lines.join("\n");
+        if content.trim().is_empty() {
+            None
+        } else {
+            Some(content)
+        }
+    }
+
+    pub fn payload_insert_char(&mut self, c: char) {
+        if let Some(line) = self.payload_lines.get_mut(self.payload_cursor_row) {
+            // Ensure cursor_col is within bounds
+            let col = self.payload_cursor_col.min(line.len());
+            line.insert(col, c);
+            self.payload_cursor_col = col + 1;
+        }
+    }
+
+    pub fn payload_backspace(&mut self) {
+        if self.payload_cursor_col > 0 {
+            if let Some(line) = self.payload_lines.get_mut(self.payload_cursor_row) {
+                let col = self.payload_cursor_col.min(line.len());
+                if col > 0 {
+                    line.remove(col - 1);
+                    self.payload_cursor_col = col - 1;
+                }
+            }
+        } else if self.payload_cursor_row > 0 {
+            // Merge with previous line
+            let current_line = self.payload_lines.remove(self.payload_cursor_row);
+            self.payload_cursor_row -= 1;
+            if let Some(prev_line) = self.payload_lines.get_mut(self.payload_cursor_row) {
+                self.payload_cursor_col = prev_line.len();
+                prev_line.push_str(&current_line);
+            }
+        }
+    }
+
+    pub fn payload_delete(&mut self) {
+        if let Some(line) = self.payload_lines.get_mut(self.payload_cursor_row) {
+            let col = self.payload_cursor_col.min(line.len());
+            if col < line.len() {
+                line.remove(col);
+            } else if self.payload_cursor_row + 1 < self.payload_lines.len() {
+                // Merge next line into current
+                let next_line = self.payload_lines.remove(self.payload_cursor_row + 1);
+                if let Some(current_line) = self.payload_lines.get_mut(self.payload_cursor_row) {
+                    current_line.push_str(&next_line);
+                }
+            }
+        }
+    }
+
+    pub fn payload_newline(&mut self) {
+        if let Some(line) = self.payload_lines.get_mut(self.payload_cursor_row) {
+            let col = self.payload_cursor_col.min(line.len());
+            let rest = line[col..].to_string();
+            line.truncate(col);
+            self.payload_cursor_row += 1;
+            self.payload_lines.insert(self.payload_cursor_row, rest);
+            self.payload_cursor_col = 0;
+        }
+    }
+
+    pub fn payload_move_up(&mut self) {
+        if self.payload_cursor_row > 0 {
+            self.payload_cursor_row -= 1;
+            // Clamp column to line length
+            if let Some(line) = self.payload_lines.get(self.payload_cursor_row) {
+                self.payload_cursor_col = self.payload_cursor_col.min(line.len());
+            }
+        }
+    }
+
+    pub fn payload_move_down(&mut self) {
+        if self.payload_cursor_row + 1 < self.payload_lines.len() {
+            self.payload_cursor_row += 1;
+            // Clamp column to line length
+            if let Some(line) = self.payload_lines.get(self.payload_cursor_row) {
+                self.payload_cursor_col = self.payload_cursor_col.min(line.len());
+            }
+        }
+    }
+
+    pub fn payload_move_left(&mut self) {
+        if self.payload_cursor_col > 0 {
+            self.payload_cursor_col -= 1;
+        } else if self.payload_cursor_row > 0 {
+            // Move to end of previous line
+            self.payload_cursor_row -= 1;
+            if let Some(line) = self.payload_lines.get(self.payload_cursor_row) {
+                self.payload_cursor_col = line.len();
+            }
+        }
+    }
+
+    pub fn payload_move_right(&mut self) {
+        if let Some(line) = self.payload_lines.get(self.payload_cursor_row) {
+            if self.payload_cursor_col < line.len() {
+                self.payload_cursor_col += 1;
+            } else if self.payload_cursor_row + 1 < self.payload_lines.len() {
+                // Move to start of next line
+                self.payload_cursor_row += 1;
+                self.payload_cursor_col = 0;
+            }
+        }
+    }
+
+    pub fn payload_move_home(&mut self) {
+        self.payload_cursor_col = 0;
+    }
+
+    pub fn payload_move_end(&mut self) {
+        if let Some(line) = self.payload_lines.get(self.payload_cursor_row) {
+            self.payload_cursor_col = line.len();
+        }
     }
 }
