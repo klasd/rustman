@@ -6,10 +6,11 @@ A lightweight, terminal-based HTTP client built with Rust and Ratatui, inspired 
 
 - 🚀 **Lightweight TUI** - Built with Ratatui for a responsive, modern terminal interface
 - 📝 **Connection Management** - Create, save, and manage multiple HTTP connections
-- 🔗 **Query Parameters** - Add and manage query strings for your requests
-- 📦 **Payload Support** - Send POST/PUT/PATCH requests with JSON or custom payloads
+- 🔗 **Query Parameters** - Add and manage query strings with a dedicated key-value editor
+- 📋 **Custom Headers** - Add custom HTTP headers to your requests
+- 📦 **Payload Support** - Send POST/PUT/PATCH requests with JSON or custom payloads via multi-line editor
 - 💾 **Persistent Storage** - Save connections as JSON files and auto-load them on startup
-- 🎯 **HTTP Methods** - Support for GET, POST, PUT, PATCH methods
+- 🎯 **HTTP Methods** - Support for GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS
 - ⚡ **Async Requests** - Non-blocking HTTP requests powered by Tokio and Reqwest
 - 🔒 **HTTPS Support** - Automatic HTTPS detection on port 443
 - ⏱️ **Request Timeout** - 10-second timeout with visual feedback and cancellation support
@@ -50,13 +51,14 @@ cargo run
    - You'll see: "✓ Connection 'my-api' created"
 
 3. **Edit the connection details** (press `e`)
-   - A dialog appears showing all fields: Name, URL, Port, Method
+   - A dialog appears showing all fields: Name, URL, Port, Method, Headers, Params, Payload
    - Each field is highlighted when active
    - Press `Tab` to move to the next field
    - Press `Shift+Tab` to move to the previous field
-   - Edit each field as needed (e.g., change URL to `api.example.com`)
-   - Press `Enter` to confirm each field
-   - Press `Esc` at any time to cancel editing
+   - Use `<` and `>` to cycle through HTTP methods
+   - Press `Enter` on Headers, Params, or Payload to open dedicated editors
+   - Press `Enter` on other fields to save changes
+   - Press `Esc` to discard changes
 
 4. **Send a request** (press `r`)
    - A "Connecting..." dialog appears with the target URL
@@ -113,8 +115,43 @@ When editing a connection with `e`, the following controls are available:
 |-----|--------|
 | `Tab` | Move to next field |
 | `Shift+Tab` | Move to previous field |
-| `Enter` | Confirm field edit |
-| `Esc` | Cancel editing |
+| `<` / `>` | Cycle through HTTP methods (when Method field is active) |
+| `Enter` | Save changes / Open editor for Headers, Params, or Payload |
+| `Esc` | Discard changes and close dialog |
+
+### Headers & Query Params Editor
+
+When editing Headers or Query Params (press `Enter` on those fields):
+
+| Key | Action |
+|-----|--------|
+| `Up` / `Down` or `j` / `k` | Navigate between items |
+| `n` or `a` | Add new key-value pair |
+| `d` or `Delete` | Delete selected item |
+| `k` or `Enter` or `e` | Edit the key of selected item |
+| `v` or `Tab` | Edit the value of selected item |
+| `F2` | Save changes and return to edit dialog |
+| `Esc` | Discard changes and return to edit dialog |
+
+When editing a key or value:
+
+| Key | Action |
+|-----|--------|
+| `Enter` or `Tab` | Save the current field |
+| `Esc` | Cancel editing the field |
+
+### Payload Editor
+
+When editing the Payload (press `Enter` on Payload field):
+
+| Key | Action |
+|-----|--------|
+| Arrow keys | Navigate the cursor |
+| `Enter` | Insert new line |
+| `Backspace` / `Delete` | Delete characters |
+| `Home` / `End` | Jump to start/end of line |
+| `F2` | Save payload and return to edit dialog |
+| `Esc` | Discard changes and return to edit dialog |
 
 ### Global
 
@@ -163,28 +200,27 @@ Rustman automatically formats responses for better readability:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Connections (25%)       │     Request Editor (75%)          │
-│ - Connection 1          │ Method: GET                       │
-│ - Connection 2          │ URL: api.example.com              │
-│ - Connection 3          │ Port: 3000                        │
-│                         │                                    │
-│                         │ Query Parameters:                 │
-│                         │   page=1                          │
-│                         │   limit=10                        │
-│                         │                                    │
-│                         │ Payload:                          │
-└─────────────────────────────────────────────────────────────┘
+│ Connections (25%)       │     Connection Info (fixed)       │
+│ > my-api                │ Name:   my-api                    │
+│   another-api           │ URL:    http://api.example.com:3000│
+│   test-server           │ Method: POST                      │
+├─────────────────────────┼───────────────────────────────────┤
+│                         │     Response (scrollable)         │
+│                         │ Status: 200                       │
+│                         │                                   │
+│                         │ Headers:                          │
+│                         │   content-type: application/json  │
+│                         │                                   │
+│                         │ Body:                             │
+│                         │ {                                 │
+│                         │   "message": "Success",           │
+│                         │   "data": [...]                   │
+│                         │ }                                 │
+└─────────────────────────┴───────────────────────────────────┘
 ┌─────────────────────────────────────────────────────────────┐
-│ Response (20%)                                               │
-│ Status: 200                                                  │
-│                                                              │
-│ Body:                                                        │
-│ { "message": "Success", "data": [...] }                    │
-└─────────────────────────────────────────────────────────────┘
-┌─────────────────────────────────────────────────────────────┐
-│ Shortcuts (15%)                                              │
-│ Controls: n-new d-delete e-edit r-send s-save                │
-│ Request: Esc-cancel  Response: PgUp/PgDn-scroll             │
+│ Shortcuts                                                    │
+│ Main: n-new e-edit d-delete r-send p/Tab-switch panel       │
+│ Scroll: j/k-vim scroll PgUp/PgDn-page Home/End-jump         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -211,12 +247,16 @@ Connections are saved as JSON files with the following structure:
   "name": "my-api",
   "url": "api.example.com",
   "port": 3000,
-  "method": "GET",
+  "method": "POST",
   "query_params": {
     "page": "1",
     "limit": "10"
   },
-  "payload": null
+  "headers": {
+    "Content-Type": "application/json",
+    "Authorization": "Bearer token123"
+  },
+  "payload": "{\"key\": \"value\"}"
 }
 ```
 
@@ -233,7 +273,7 @@ You can manually edit these JSON files or load them back into the application.
 
 ## Roadmap
 
-### ✅ Completed
+### Completed
 - [x] Save connections to JSON files
 - [x] Auto-load connections from JSON files on startup
 - [x] Connection editing with unified dialog
@@ -242,12 +282,13 @@ You can manually edit these JSON files or load them back into the application.
 - [x] HTTPS auto-detection on port 443
 - [x] Input dialogs for creating connections
 - [x] Response auto-formatting (JSON pretty-printing, text wrapping)
+- [x] HTTP method selector (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS)
+- [x] Query parameter editor dialog
+- [x] Request headers editor dialog
+- [x] Request body/payload editor dialog
 
-### 🔄 In Progress / Planned
+### In Progress / Planned
 - [ ] Load connections from JSON files via UI
-- [ ] HTTP method selector (GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS)
-- [ ] Query parameter editor dialog
-- [ ] Request body/payload editor dialog
 - [ ] Response syntax highlighting (JSON, XML, HTML)
 - [ ] Request history
 - [ ] Authentication support (Basic Auth, Bearer tokens)
