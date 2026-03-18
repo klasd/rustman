@@ -1,4 +1,6 @@
-use crate::models::{ActivePanel, ApiResponse, Connection, EditField, InputMode, HTTP_METHODS};
+use crate::models::{
+    ActivePanel, ApiResponse, Connection, EditField, InputMode, KeyValueTarget, HTTP_METHODS,
+};
 use anyhow::Result;
 use std::fs;
 use std::path::PathBuf;
@@ -23,6 +25,18 @@ pub struct App {
     pub payload_cursor_row: usize,
     pub payload_cursor_col: usize,
     pub payload_scroll: usize,
+    // Key-value editor state (for headers and query params)
+    pub kv_target: KeyValueTarget,
+    pub kv_items: Vec<(String, String)>,
+    pub kv_selected: usize,
+    pub kv_editing: Option<KvEditMode>,
+    pub kv_scroll: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum KvEditMode {
+    Key,
+    Value,
 }
 
 impl App {
@@ -67,6 +81,11 @@ impl App {
             payload_cursor_row: 0,
             payload_cursor_col: 0,
             payload_scroll: 0,
+            kv_target: KeyValueTarget::Headers,
+            kv_items: Vec::new(),
+            kv_selected: 0,
+            kv_editing: None,
+            kv_scroll: 0,
         };
 
         // Load all saved connections from JSON files
@@ -76,7 +95,14 @@ impl App {
     }
 
     pub fn add_connection(&mut self, connection: Connection) {
+        let name = connection.name.clone();
         self.connections.push(connection);
+        // Sort connections by name for consistent ordering
+        self.connections.sort_by(|a, b| a.name.cmp(&b.name));
+        // Select the newly added connection
+        if let Some(idx) = self.connections.iter().position(|c| c.name == name) {
+            self.selected_connection = idx;
+        }
     }
 
     pub fn delete_selected_connection(&mut self) {
@@ -343,5 +369,89 @@ impl App {
         if let Some(line) = self.payload_lines.get(self.payload_cursor_row) {
             self.payload_cursor_col = line.len();
         }
+    }
+
+    // Key-value editor helpers
+    pub fn init_kv_editor(&mut self, target: KeyValueTarget) {
+        self.kv_target = target.clone();
+        if let Some(conn) = self.current_connection() {
+            let map = match target {
+                KeyValueTarget::Headers => &conn.headers,
+                KeyValueTarget::QueryParams => &conn.query_params,
+            };
+            self.kv_items = map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            // Sort by key for consistent display
+            self.kv_items.sort_by(|a, b| a.0.cmp(&b.0));
+        } else {
+            self.kv_items = Vec::new();
+        }
+        self.kv_selected = 0;
+        self.kv_editing = None;
+        self.kv_scroll = 0;
+        self.input_buffer.clear();
+    }
+
+    pub fn kv_to_hashmap(&self) -> std::collections::HashMap<String, String> {
+        self.kv_items.iter().cloned().collect()
+    }
+
+    pub fn kv_add_item(&mut self) {
+        self.kv_items.push((String::new(), String::new()));
+        self.kv_selected = self.kv_items.len() - 1;
+        self.kv_editing = Some(KvEditMode::Key);
+        self.input_buffer.clear();
+    }
+
+    pub fn kv_delete_selected(&mut self) {
+        if !self.kv_items.is_empty() && self.kv_selected < self.kv_items.len() {
+            self.kv_items.remove(self.kv_selected);
+            if self.kv_selected > 0 && self.kv_selected >= self.kv_items.len() {
+                self.kv_selected = self.kv_items.len().saturating_sub(1);
+            }
+        }
+    }
+
+    pub fn kv_move_up(&mut self) {
+        if self.kv_selected > 0 {
+            self.kv_selected -= 1;
+        }
+    }
+
+    pub fn kv_move_down(&mut self) {
+        if self.kv_selected + 1 < self.kv_items.len() {
+            self.kv_selected += 1;
+        }
+    }
+
+    pub fn kv_start_edit_key(&mut self) {
+        if let Some((key, _)) = self.kv_items.get(self.kv_selected) {
+            self.input_buffer = key.clone();
+            self.kv_editing = Some(KvEditMode::Key);
+        }
+    }
+
+    pub fn kv_start_edit_value(&mut self) {
+        if let Some((_, value)) = self.kv_items.get(self.kv_selected) {
+            self.input_buffer = value.clone();
+            self.kv_editing = Some(KvEditMode::Value);
+        }
+    }
+
+    pub fn kv_save_edit(&mut self) {
+        if let Some(edit_mode) = &self.kv_editing {
+            if let Some(item) = self.kv_items.get_mut(self.kv_selected) {
+                match edit_mode {
+                    KvEditMode::Key => item.0 = self.input_buffer.clone(),
+                    KvEditMode::Value => item.1 = self.input_buffer.clone(),
+                }
+            }
+        }
+        self.kv_editing = None;
+        self.input_buffer.clear();
+    }
+
+    pub fn kv_cancel_edit(&mut self) {
+        self.kv_editing = None;
+        self.input_buffer.clear();
     }
 }

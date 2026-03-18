@@ -1,5 +1,5 @@
 use crate::app::App;
-use crate::models::{Connection, EditField, InputMode, ActivePanel};
+use crate::models::{Connection, EditField, InputMode, ActivePanel, KeyValueTarget};
 use crossterm::event::{KeyCode, KeyEvent};
 
 pub async fn handle_input(app: &mut App, key: KeyEvent) {
@@ -8,6 +8,7 @@ pub async fn handle_input(app: &mut App, key: KeyEvent) {
         InputMode::ConnectionName => handle_connection_name_input(app, key),
         InputMode::EditingConnection => handle_edit_dialog_input(app, key),
         InputMode::EditingPayload => handle_payload_editor_input(app, key),
+        InputMode::EditingKeyValue => handle_keyvalue_editor_input(app, key),
         InputMode::Connecting => handle_connecting_mode(app, key),
     }
 }
@@ -188,6 +189,9 @@ fn handle_connection_name_input(app: &mut App, key: KeyEvent) {
 fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
     let is_method_field = matches!(app.edit_field, EditField::Method);
     let is_payload_field = matches!(app.edit_field, EditField::Payload);
+    let is_headers_field = matches!(app.edit_field, EditField::Headers);
+    let is_query_params_field = matches!(app.edit_field, EditField::QueryParams);
+    let is_special_field = is_method_field || is_payload_field || is_headers_field || is_query_params_field;
     
     match key.code {
         KeyCode::Tab => {
@@ -198,7 +202,9 @@ fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
                 EditField::Name => EditField::Url,
                 EditField::Url => EditField::Port,
                 EditField::Port => EditField::Method,
-                EditField::Method => EditField::Payload,
+                EditField::Method => EditField::Headers,
+                EditField::Headers => EditField::QueryParams,
+                EditField::QueryParams => EditField::Payload,
                 EditField::Payload => EditField::Name,
             };
             app.input_buffer.clear();
@@ -213,7 +219,9 @@ fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
                 EditField::Url => EditField::Name,
                 EditField::Port => EditField::Url,
                 EditField::Method => EditField::Port,
-                EditField::Payload => EditField::Method,
+                EditField::Headers => EditField::Method,
+                EditField::QueryParams => EditField::Headers,
+                EditField::Payload => EditField::QueryParams,
             };
             app.input_buffer.clear();
             load_current_field_value(app);
@@ -224,10 +232,10 @@ fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
         KeyCode::Right if is_method_field => {
             app.next_method();
         }
-        KeyCode::Char(c) if !is_method_field && !is_payload_field => {
+        KeyCode::Char(c) if !is_special_field => {
             app.input_buffer.push(c);
         }
-        KeyCode::Backspace if !is_method_field && !is_payload_field => {
+        KeyCode::Backspace if !is_special_field => {
             app.input_buffer.pop();
         }
         KeyCode::Enter if is_payload_field => {
@@ -236,6 +244,16 @@ fn handle_edit_dialog_input(app: &mut App, key: KeyEvent) {
                 .and_then(|c| c.payload.clone());
             app.init_payload_editor(payload.as_deref());
             app.input_mode = InputMode::EditingPayload;
+        }
+        KeyCode::Enter if is_headers_field => {
+            // Open key-value editor for headers
+            app.init_kv_editor(KeyValueTarget::Headers);
+            app.input_mode = InputMode::EditingKeyValue;
+        }
+        KeyCode::Enter if is_query_params_field => {
+            // Open key-value editor for query params
+            app.init_kv_editor(KeyValueTarget::QueryParams);
+            app.input_mode = InputMode::EditingKeyValue;
         }
         KeyCode::Enter => {
             // Save the current field and exit the dialog
@@ -290,6 +308,12 @@ fn load_current_field_value(app: &mut App) {
             EditField::Method => {
                 app.method_index = App::method_index_from_string(&conn.method);
             }
+            EditField::Headers => {
+                // Headers use the key-value editor
+            }
+            EditField::QueryParams => {
+                // Query params use the key-value editor
+            }
             EditField::Payload => {
                 // Payload doesn't use input_buffer, it uses the payload editor
             }
@@ -327,6 +351,12 @@ fn apply_field_edit(app: &mut App) {
             EditField::Method => {
                 conn.method = current_method.clone();
                 app.set_error(format!("✓ Method updated: {}", current_method));
+            }
+            EditField::Headers => {
+                // Headers are edited in key-value editor mode
+            }
+            EditField::QueryParams => {
+                // Query params are edited in key-value editor mode
             }
             EditField::Payload => {
                 // Payload is edited in its own editor mode, not here
@@ -394,6 +424,91 @@ fn handle_payload_editor_input(app: &mut App, key: KeyEvent) {
     }
 }
 
+fn handle_keyvalue_editor_input(app: &mut App, key: KeyEvent) {
+    // Check if we're currently editing a key or value
+    if app.kv_editing.is_some() {
+        match key.code {
+            KeyCode::Esc => {
+                app.kv_cancel_edit();
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                app.kv_save_edit();
+            }
+            KeyCode::Char(c) => {
+                app.input_buffer.push(c);
+            }
+            KeyCode::Backspace => {
+                app.input_buffer.pop();
+            }
+            _ => {}
+        }
+        return;
+    }
+    
+    // Not editing - handle navigation and commands
+    match key.code {
+        KeyCode::Esc => {
+            // Discard changes and go back to edit dialog
+            app.input_mode = InputMode::EditingConnection;
+            let target_name = match app.kv_target {
+                KeyValueTarget::Headers => "Headers",
+                KeyValueTarget::QueryParams => "Query params",
+            };
+            app.set_error(format!("✗ {} changes discarded", target_name));
+        }
+        KeyCode::F(2) => {
+            // Save and go back to edit dialog
+            let kv_map = app.kv_to_hashmap();
+            let target = app.kv_target.clone();
+            if let Some(conn) = app.current_connection_mut() {
+                match target {
+                    KeyValueTarget::Headers => conn.headers = kv_map,
+                    KeyValueTarget::QueryParams => conn.query_params = kv_map,
+                }
+            }
+            app.input_mode = InputMode::EditingConnection;
+            let target_name = match target {
+                KeyValueTarget::Headers => "Headers",
+                KeyValueTarget::QueryParams => "Query params",
+            };
+            app.set_error(format!("✓ {} saved", target_name));
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            app.kv_move_up();
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            app.kv_move_down();
+        }
+        KeyCode::Char('a') | KeyCode::Char('n') => {
+            // Add new item
+            app.kv_add_item();
+        }
+        KeyCode::Char('d') | KeyCode::Delete => {
+            // Delete selected item
+            app.kv_delete_selected();
+        }
+        KeyCode::Char('e') | KeyCode::Enter => {
+            // Edit key of selected item
+            if !app.kv_items.is_empty() {
+                app.kv_start_edit_key();
+            }
+        }
+        KeyCode::Char('v') => {
+            // Edit value of selected item
+            if !app.kv_items.is_empty() {
+                app.kv_start_edit_value();
+            }
+        }
+        KeyCode::Tab => {
+            // Toggle between editing key and value
+            if !app.kv_items.is_empty() {
+                app.kv_start_edit_value();
+            }
+        }
+        _ => {}
+    }
+}
+
 fn handle_connecting_mode(app: &mut App, key: KeyEvent) {
     match key.code {
         KeyCode::Char('c') | KeyCode::Esc => {
@@ -410,6 +525,9 @@ async fn send_request(app: &mut App, conn: &crate::models::Connection) {
     
     let client = reqwest::Client::new();
     let url = conn.full_url();
+    
+    // Clone headers for use in async block
+    let custom_headers = conn.headers.clone();
     
     // Create a timeout future
     let timeout = tokio::time::sleep(std::time::Duration::from_secs(10));
@@ -434,13 +552,39 @@ async fn send_request(app: &mut App, conn: &crate::models::Connection) {
                         _ => client.get(&url),
                     };
 
+                    // Add custom headers
+                    for (key, value) in &custom_headers {
+                        req = req.header(key, value);
+                    }
+
                     if let Some(payload) = &conn.payload {
                         req = req.body(payload.clone());
                     }
 
                     req.send().await
                 }
-                _ => client.get(&url).send().await,
+                "DELETE" => {
+                    let mut req = client.delete(&url);
+                    for (key, value) in &custom_headers {
+                        req = req.header(key, value);
+                    }
+                    req.send().await
+                }
+                "HEAD" => {
+                    let mut req = client.head(&url);
+                    for (key, value) in &custom_headers {
+                        req = req.header(key, value);
+                    }
+                    req.send().await
+                }
+                _ => {
+                    // GET and OPTIONS
+                    let mut req = client.get(&url);
+                    for (key, value) in &custom_headers {
+                        req = req.header(key, value);
+                    }
+                    req.send().await
+                }
             }
         } => res,
     };
@@ -450,12 +594,18 @@ async fn send_request(app: &mut App, conn: &crate::models::Connection) {
     match result {
         Ok(resp) => {
             let status = resp.status().as_u16();
+            // Capture headers before consuming response
+            let headers = resp.headers()
+                .iter()
+                .map(|(k, v)| format!("{}: {}", k, v.to_str().unwrap_or("<binary>")))
+                .collect::<Vec<_>>()
+                .join("\n");
             match resp.text().await {
                 Ok(body) => {
                     app.response = Some(crate::models::ApiResponse {
                         status,
                         body,
-                        headers: String::new(),
+                        headers,
                     });
                 }
                 Err(e) => {

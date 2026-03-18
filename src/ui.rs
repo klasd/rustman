@@ -74,6 +74,12 @@ pub fn draw(f: &mut Frame, app: &App) {
             let modal_area = centered_rect(80, 80, f.area());
             draw_payload_editor(f, app, modal_area);
         }
+        crate::models::InputMode::EditingKeyValue => {
+            // Draw opaque overlay covering entire screen
+            draw_opaque_overlay(f, f.area());
+            let modal_area = centered_rect(70, 70, f.area());
+            draw_keyvalue_editor(f, app, modal_area);
+        }
         crate::models::InputMode::Connecting => {
             // Draw opaque overlay covering entire screen
             draw_opaque_overlay(f, f.area());
@@ -347,6 +353,20 @@ fn draw_edit_dialog(f: &mut Frame, app: &App, area: Rect) {
             matches!(app.edit_field, crate::models::EditField::Method),
         ));
 
+        // Headers field (shows preview, Enter to edit)
+        text.push(draw_keyvalue_field(
+            "Headers",
+            &conn.headers,
+            matches!(app.edit_field, crate::models::EditField::Headers),
+        ));
+
+        // Query Params field (shows preview, Enter to edit)
+        text.push(draw_keyvalue_field(
+            "Params",
+            &conn.query_params,
+            matches!(app.edit_field, crate::models::EditField::QueryParams),
+        ));
+
         // Payload field (shows preview, Enter to edit)
         text.push(draw_payload_field(
             conn.payload.as_deref(),
@@ -595,6 +615,298 @@ fn draw_payload_editor(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(help_widget, help_area);
 }
 
+fn draw_keyvalue_editor(f: &mut Frame, app: &App, area: Rect) {
+    use crate::app::KvEditMode;
+    use crate::models::KeyValueTarget;
+
+    let title = match app.kv_target {
+        KeyValueTarget::Headers => "Edit Headers",
+        KeyValueTarget::QueryParams => "Edit Query Params",
+    };
+
+    // Draw background with border
+    let background = Block::default()
+        .borders(Borders::ALL)
+        .title(title)
+        .style(Style::default().fg(Color::Cyan).bg(Color::Black));
+    f.render_widget(background, area);
+
+    // Calculate inner area for content
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(2),
+    };
+
+    // Reserve space for help text at the bottom
+    let help_height = 3;
+    let list_height = inner.height.saturating_sub(help_height);
+
+    let list_area = Rect {
+        x: inner.x,
+        y: inner.y,
+        width: inner.width,
+        height: list_height,
+    };
+
+    let help_area = Rect {
+        x: inner.x,
+        y: inner.y + list_height,
+        width: inner.width,
+        height: help_height,
+    };
+
+    // Calculate visible items based on scroll
+    let visible_lines = list_height.saturating_sub(1) as usize; // -1 for header
+    let total_items = app.kv_items.len();
+
+    // Auto-scroll to keep selected item visible
+    let scroll = if app.kv_selected < app.kv_scroll {
+        app.kv_selected
+    } else if app.kv_selected >= app.kv_scroll + visible_lines {
+        app.kv_selected - visible_lines + 1
+    } else {
+        app.kv_scroll
+    };
+
+    // Build text lines
+    let mut text_lines: Vec<Line> = Vec::new();
+
+    // Header row
+    let key_width = (inner.width / 2).saturating_sub(2) as usize;
+    let value_width = (inner.width / 2).saturating_sub(2) as usize;
+    text_lines.push(Line::from(vec![
+        Span::styled(
+            format!("  {:<width$}", "Key", width = key_width),
+            Style::default()
+                .fg(Color::Cyan)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" {:<width$}", "Value", width = value_width),
+            Style::default()
+                .fg(Color::Cyan)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    // Items
+    for (idx, (key, value)) in app
+        .kv_items
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(visible_lines)
+    {
+        let is_selected = idx == app.kv_selected;
+
+        // Truncate key and value to fit
+        let key_display: String = if key.len() > key_width {
+            format!("{}...", &key[..key_width.saturating_sub(3)])
+        } else {
+            key.clone()
+        };
+        let value_display: String = if value.len() > value_width {
+            format!("{}...", &value[..value_width.saturating_sub(3)])
+        } else {
+            value.clone()
+        };
+
+        // Check if we're editing this item
+        let is_editing_key = is_selected && matches!(app.kv_editing, Some(KvEditMode::Key));
+        let is_editing_value = is_selected && matches!(app.kv_editing, Some(KvEditMode::Value));
+
+        let selection_indicator = if is_selected { "> " } else { "  " };
+
+        let key_text = if is_editing_key {
+            format!("{}_", app.input_buffer)
+        } else {
+            key_display
+        };
+
+        let value_text = if is_editing_value {
+            format!("{}_", app.input_buffer)
+        } else {
+            value_display
+        };
+
+        let key_style = if is_editing_key {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White).bg(Color::Black)
+        };
+
+        let value_style = if is_editing_value {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else if is_selected {
+            Style::default()
+                .fg(Color::Yellow)
+                .bg(Color::Black)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White).bg(Color::Black)
+        };
+
+        text_lines.push(Line::from(vec![
+            Span::styled(
+                selection_indicator.to_string(),
+                Style::default()
+                    .fg(Color::Green)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{:<width$}", key_text, width = key_width),
+                key_style,
+            ),
+            Span::styled(" ", Style::default().bg(Color::Black)),
+            Span::styled(
+                format!("{:<width$}", value_text, width = value_width),
+                value_style,
+            ),
+        ]));
+    }
+
+    // Fill remaining lines
+    while text_lines.len() < (list_height as usize) {
+        text_lines.push(Line::from(Span::styled(
+            "~",
+            Style::default().fg(Color::DarkGray).bg(Color::Black),
+        )));
+    }
+
+    let list_widget = Paragraph::new(text_lines).style(Style::default().bg(Color::Black));
+    f.render_widget(list_widget, list_area);
+
+    // Draw help text
+    let help_text = if app.kv_editing.is_some() {
+        vec![
+            Line::from(vec![
+                Span::styled(
+                    "Enter",
+                    Style::default()
+                        .fg(Color::Green)
+                        .bg(Color::Black)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " save  |  ",
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+                Span::styled(
+                    "Esc",
+                    Style::default()
+                        .fg(Color::Red)
+                        .bg(Color::Black)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " cancel edit",
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+            ]),
+            Line::from(vec![Span::styled(
+                "Type to edit the field",
+                Style::default().fg(Color::DarkGray).bg(Color::Black),
+            )]),
+        ]
+    } else {
+        vec![
+            Line::from(vec![
+                Span::styled(
+                    "F2",
+                    Style::default()
+                        .fg(Color::Green)
+                        .bg(Color::Black)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " save  |  ",
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+                Span::styled(
+                    "Esc",
+                    Style::default()
+                        .fg(Color::Red)
+                        .bg(Color::Black)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " cancel  |  ",
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+                Span::styled(
+                    "n",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .bg(Color::Black)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " new  |  ",
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+                Span::styled(
+                    "d",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .bg(Color::Black)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " delete",
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    "k/v",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .bg(Color::Black)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " edit key/value  |  ",
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+                Span::styled(
+                    "Up/Down",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .bg(Color::Black)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    " navigate",
+                    Style::default().fg(Color::White).bg(Color::Black),
+                ),
+            ]),
+            Line::from(vec![Span::styled(
+                format!("{} items total", total_items),
+                Style::default().fg(Color::DarkGray).bg(Color::Black),
+            )]),
+        ]
+    };
+
+    let help_widget = Paragraph::new(help_text).style(Style::default().bg(Color::Black));
+    f.render_widget(help_widget, help_area);
+}
+
 fn draw_edit_field(
     label: &str,
     current_value: &str,
@@ -712,6 +1024,50 @@ fn draw_payload_field(payload: Option<&str>, is_active: bool) -> Line<'static> {
     }
 }
 
+fn draw_keyvalue_field(
+    label: &str,
+    items: &std::collections::HashMap<String, String>,
+    is_active: bool,
+) -> Line<'static> {
+    let label_text = format!("{:<10}", format!("{}:", label));
+
+    let preview = if items.is_empty() {
+        "(empty)".to_string()
+    } else {
+        format!(
+            "{} item{}",
+            items.len(),
+            if items.len() == 1 { "" } else { "s" }
+        )
+    };
+
+    if is_active {
+        let value_text = format!("[{} - Enter to edit]", preview);
+        Line::from(vec![
+            Span::styled(
+                label_text,
+                Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                value_text,
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ])
+    } else {
+        let value_text = format!("[{}]", preview);
+        Line::from(Span::styled(
+            format!("{}{}", label_text, value_text),
+            Style::default().fg(Color::DarkGray).bg(Color::Black),
+        ))
+    }
+}
+
 fn draw_connection_info(f: &mut Frame, app: &App, area: Rect) {
     let content = if let Some(conn) = app.current_connection() {
         vec![
@@ -788,6 +1144,24 @@ fn draw_response(f: &mut Frame, app: &App, area: Rect) {
                 Span::raw(response.status.to_string()),
             ]));
             lines.push(Line::from(""));
+
+            // Show headers if present
+            if !response.headers.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "Headers:",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )));
+                for header_line in response.headers.lines() {
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", header_line),
+                        Style::default().fg(Color::DarkGray),
+                    )));
+                }
+                lines.push(Line::from(""));
+            }
+
             lines.push(Line::from(Span::styled(
                 "Body:",
                 Style::default()

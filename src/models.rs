@@ -9,6 +9,8 @@ pub struct Connection {
     pub url: String,
     pub port: u16,
     pub query_params: HashMap<String, String>,
+    #[serde(default)]
+    pub headers: HashMap<String, String>,
     pub payload: Option<String>,
     pub method: String,
 }
@@ -20,6 +22,7 @@ impl Connection {
             url,
             port,
             query_params: HashMap::new(),
+            headers: HashMap::new(),
             payload: None,
             method: "GET".to_string(),
         }
@@ -48,6 +51,7 @@ pub enum InputMode {
     ConnectionName,
     EditingConnection,
     EditingPayload,
+    EditingKeyValue,
     Connecting,
 }
 
@@ -63,7 +67,15 @@ pub enum EditField {
     Url,
     Port,
     Method,
+    Headers,
+    QueryParams,
     Payload,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyValueTarget {
+    Headers,
+    QueryParams,
 }
 
 #[derive(Debug, Clone)]
